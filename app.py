@@ -15,12 +15,19 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 from sklearn.model_selection import train_test_split
-from sklearn.compose import ColumnTransformer
-from sklearn.preprocessing import OneHotEncoder
+from sklearn.compose import ColumnTransformer, TransformedTargetRegressor
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from sklearn.pipeline import make_pipeline
 from sklearn.linear_model import LinearRegression
+from sklearn.neural_network import MLPClassifier, MLPRegressor
 from sklearn.tree import DecisionTreeRegressor, plot_tree
-from sklearn.metrics import r2_score
+from sklearn.metrics import (
+    accuracy_score,
+    confusion_matrix,
+    mean_absolute_error,
+    mean_squared_error,
+    r2_score
+)
 
 
 # ==========================================================
@@ -138,6 +145,195 @@ def entrenar_modelo_lineal(df):
 
 
 # ==========================================================
+# ENTRENAR RED NEURONAL
+# ==========================================================
+
+@st.cache_resource
+def entrenar_red_neuronal(df):
+
+    features = [
+        "Category",
+        "Sub-Category",
+        "Segment",
+        "Region",
+        "Ship Mode"
+    ]
+
+    X = df[features]
+    y = df["Sales"]
+
+    preprocessor = ColumnTransformer(
+        transformers=[
+            (
+                "categorias",
+                OneHotEncoder(
+                    handle_unknown="ignore",
+                    drop="first"
+                ),
+                features
+            )
+        ]
+    )
+
+    modelo = TransformedTargetRegressor(
+        regressor=make_pipeline(
+            preprocessor,
+            MLPRegressor(
+                hidden_layer_sizes=(64, 32),
+                alpha=0.001,
+                max_iter=500,
+                early_stopping=True,
+                random_state=5
+            )
+        ),
+        transformer=StandardScaler()
+    )
+
+    X_train, X_test, y_train, y_test = train_test_split(
+        X,
+        y,
+        test_size=0.10,
+        random_state=5
+    )
+
+    modelo.fit(
+        X_train,
+        y_train
+    )
+
+    y_pred = modelo.predict(
+        X_test
+    )
+
+    r2 = r2_score(
+        y_test,
+        y_pred
+    )
+    mae = mean_absolute_error(
+        y_test,
+        y_pred
+    )
+    rmse = mean_squared_error(
+        y_test,
+        y_pred
+    ) ** 0.5
+
+    return (
+        modelo,
+        X_test,
+        y_test,
+        y_pred,
+        r2,
+        mae,
+        rmse
+    )
+
+
+# ==========================================================
+# ENTRENAR RED NEURONAL DE CLASIFICACIÓN
+# ==========================================================
+
+@st.cache_resource
+def entrenar_red_clasificacion(df):
+
+    features = [
+        "Category",
+        "Sub-Category",
+        "Segment",
+        "Region",
+        "Ship Mode"
+    ]
+    clases = [
+        "Ventas bajas",
+        "Ventas medias",
+        "Ventas altas"
+    ]
+
+    X = df[features]
+    y = df["Sales"]
+
+    X_train, X_test, y_train, y_test = train_test_split(
+        X,
+        y,
+        test_size=0.10,
+        random_state=5
+    )
+
+    limite_bajo = y_train.quantile(1 / 3)
+    limite_alto = y_train.quantile(2 / 3)
+    limites = [
+        -float("inf"),
+        limite_bajo,
+        limite_alto,
+        float("inf")
+    ]
+
+    y_train_clases = pd.cut(
+        y_train,
+        bins=limites,
+        labels=False
+    ).astype("int64")
+    y_test_clases = pd.cut(
+        y_test,
+        bins=limites,
+        labels=False
+    ).astype("int64")
+
+    preprocessor = ColumnTransformer(
+        transformers=[
+            (
+                "categorias",
+                OneHotEncoder(
+                    handle_unknown="ignore",
+                    drop="first"
+                ),
+                features
+            )
+        ]
+    )
+
+    modelo = make_pipeline(
+        preprocessor,
+        MLPClassifier(
+            hidden_layer_sizes=(64, 32),
+            alpha=0.001,
+            max_iter=500,
+            early_stopping=True,
+            random_state=5
+        )
+    )
+
+    modelo.fit(
+        X_train,
+        y_train_clases
+    )
+
+    y_pred = modelo.predict(
+        X_test
+    )
+    accuracy = accuracy_score(
+        y_test_clases,
+        y_pred
+    )
+    matriz_confusion = confusion_matrix(
+        y_test_clases,
+        y_pred,
+        labels=range(len(clases))
+    )
+
+    return (
+        modelo,
+        y_test_clases,
+        y_pred,
+        accuracy,
+        matriz_confusion,
+        limite_bajo,
+        limite_alto,
+        clases
+    )
+
+
+# ==========================================================
 # LAYOUT PRINCIPAL
 # ==========================================================
 
@@ -158,6 +354,8 @@ with col_filtros:
         "Modelo",
         [
             "Regresión Lineal",
+            "Redes Neuronales",
+            "Redes Neuronales de Clasificación",
             "Árbol de Decisión"
         ]
     )
@@ -366,6 +564,204 @@ with col_resultado:
             alpha=0.3
         )
 
+        st.pyplot(
+            fig,
+            use_container_width=True
+        )
+
+    elif modelo_seleccionado == "Redes Neuronales":
+
+        (
+            modelo_red_neuronal,
+            X_test_red,
+            y_test_red,
+            y_pred_red,
+            r2_red,
+            mae_red,
+            rmse_red
+        ) = entrenar_red_neuronal(df)
+
+        prediccion_red = modelo_red_neuronal.predict(
+            nuevo_pedido
+        )[0]
+
+        st.success(
+            f"""
+            **Resultado de la predicción**
+
+            Para la Categoría **{categoria}**,
+            Sub-Categoría **{subcategoria}**,
+            Segmento **{segmento}**,
+            Región **{region}**
+            y modo de envío **{ship_mode}**,
+            la Red Neuronal estima ventas de
+            **{prediccion_red:.2f} USD**.
+            """
+        )
+
+        st.subheader("Evaluación en datos de prueba")
+        col_r2, col_mae, col_rmse = st.columns(3)
+
+        col_r2.metric(
+            "R²",
+            f"{r2_red:.3f}"
+        )
+        col_mae.metric(
+            "MAE (USD)",
+            f"{mae_red:.2f}"
+        )
+        col_rmse.metric(
+            "RMSE (USD)",
+            f"{rmse_red:.2f}"
+        )
+
+        fig, ax = plt.subplots()
+
+        ax.scatter(
+            y_test_red,
+            y_pred_red,
+            alpha=0.4,
+            color="blue",
+            s=15,
+            label="Predicciones de prueba"
+        )
+
+        limite_min = min(
+            y_test_red.min(),
+            y_pred_red.min()
+        )
+        limite_max = max(
+            y_test_red.max(),
+            y_pred_red.max()
+        )
+
+        ax.plot(
+            [limite_min, limite_max],
+            [limite_min, limite_max],
+            color="red",
+            linewidth=2,
+            label="Predicción ideal"
+        )
+
+        ax.set_xlabel(
+            "Ventas reales (USD)",
+            fontsize=10
+        )
+        ax.set_ylabel(
+            "Ventas predichas (USD)",
+            fontsize=10
+        )
+        ax.set_title(
+            "Red Neuronal: valores reales vs. predichos",
+            fontsize=12,
+            fontweight="bold"
+        )
+        ax.tick_params(
+            labelsize=8
+        )
+        ax.legend(
+            fontsize=8
+        )
+        ax.grid(
+            alpha=0.3
+        )
+
+        st.pyplot(
+            fig,
+            use_container_width=True
+        )
+
+    elif modelo_seleccionado == "Redes Neuronales de Clasificación":
+
+        (
+            modelo_clasificacion,
+            y_test_clases,
+            y_pred_clases,
+            accuracy_clasificacion,
+            matriz_confusion,
+            limite_bajo,
+            limite_alto,
+            clases
+        ) = entrenar_red_clasificacion(df)
+
+        prediccion_clase = modelo_clasificacion.predict(
+            nuevo_pedido
+        )[0]
+        nombre_clase = clases[int(prediccion_clase)]
+        probabilidades = modelo_clasificacion.predict_proba(
+            nuevo_pedido
+        )[0]
+        confianza_clase = probabilidades[
+            list(modelo_clasificacion.classes_).index(prediccion_clase)
+        ]
+
+        st.success(
+            f"""
+            **Clasificación de ventas**
+
+            Para la Categoría **{categoria}**,
+            Sub-Categoría **{subcategoria}**,
+            Segmento **{segmento}**,
+            Región **{region}**
+            y modo de envío **{ship_mode}**,
+            el modelo clasifica las ventas como
+            **{nombre_clase}**.
+
+            Probabilidad estimada para esta clase:
+            **{confianza_clase * 100:.2f}%**.
+            """
+        )
+
+        st.caption(
+            f"Rangos definidos con terciles del conjunto de entrenamiento: "
+            f"bajas ≤ ${limite_bajo:.2f}; "
+            f"medias > ${limite_bajo:.2f} y ≤ ${limite_alto:.2f}; "
+            f"altas > ${limite_alto:.2f}."
+        )
+        st.metric(
+            "Exactitud en datos de prueba",
+            f"{accuracy_clasificacion * 100:.2f}%"
+        )
+
+        fig, ax = plt.subplots()
+        imagen = ax.imshow(
+            matriz_confusion,
+            cmap="Blues"
+        )
+        fig.colorbar(
+            imagen,
+            ax=ax,
+            label="Cantidad de pedidos"
+        )
+
+        posiciones = range(len(clases))
+        ax.set_xticks(posiciones)
+        ax.set_xticklabels(
+            clases,
+            rotation=20,
+            ha="right"
+        )
+        ax.set_yticks(posiciones)
+        ax.set_yticklabels(clases)
+        ax.set_xlabel("Clase predicha")
+        ax.set_ylabel("Clase real")
+        ax.set_title(
+            "Red Neuronal de Clasificación: matriz de confusión",
+            fontsize=12,
+            fontweight="bold"
+        )
+
+        for fila in range(len(clases)):
+            for columna in range(len(clases)):
+                ax.text(
+                    columna,
+                    fila,
+                    matriz_confusion[fila, columna],
+                    ha="center",
+                    va="center"
+                )
+
+        fig.tight_layout()
         st.pyplot(
             fig,
             use_container_width=True
